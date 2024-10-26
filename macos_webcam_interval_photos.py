@@ -8,6 +8,7 @@ import requests
 from dotenv import load_dotenv
 import pygame
 import cv2
+from collections import deque
 
 # Load environment variables from .env file
 load_dotenv()
@@ -33,6 +34,67 @@ PHOTOS_DIR = "photos"
 os.makedirs(PHOTOS_DIR, exist_ok=True)
 
 INTERVAL = 5  # or whatever interval you want between photos
+
+class ImageAnalyzer:
+    def __init__(self, client):
+        self.message_history = deque(maxlen=10)
+        self.client = client
+
+    def analyze_image(self, image_path):
+        # Read and encode the image
+        with open(image_path, "rb") as image_file:
+            encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+
+
+        response = self.client.chat.completions.create(
+            model="gpt-4-vision-preview",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image detailed. Pay extra attention to the people \
+                        in the image and what they are doing."},
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/jpeg;base64,{encoded_image}"
+                        },
+                    ],
+                }
+            ],
+            max_tokens=300,
+        )
+
+        description = response.choices[0].message.content
+        
+        messages = [
+            {"role": "system", "content": "You are two skeletons named Knotan and Skallan, commenting on scenes in a garden during Halloween."}
+        ]
+        
+        #messages.extend(list(self.message_history))
+        
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Imagine that you are two skeletons (Knotan och Skallan) in a garden\
+						during halloween and you are watching the scene described below. \
+						let the skeletons comment what they see and call on the people they are abnalyuzing like: you therein the green hoodie.\
+						as in the style of Statler and Waldorf in the muppets but keep it short and catchy and funny and in swedish max four sentences? never use markup. \
+                        Each line xtarst with the ane of the skelleton talking  like Skallan: \
+                      Here is the description of the scene: " + description}
+            ],
+        })
+
+        response = self.client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=300,
+        )
+
+        dialog = response.choices[0].message.content
+
+        self.message_history.append({"role": "assistant", "content": dialog})
+
+        return dialog
 
 def setup_camera():
     """List available cameras and let the user select one."""
@@ -143,59 +205,6 @@ def process_dialog(dialog, photo_folder):
         
         time.sleep(0.5)
 
-def analyze_image(image_path):
-    """Analyze the image using OpenAI's vision model and process the resulting dialog."""
-    with open(image_path, "rb") as image_file:
-        base64_image = base64.b64encode(image_file.read()).decode('utf-8')
-
-    response = client.chat.completions.create(
-        model="gpt-4-vision-preview",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Describe this image detailed. Pay extra attention to the people \
-					in the image and what they are doing."},
-                    {
-                        "type": "image_url",
-                        "image_url": f"data:image/jpeg;base64,{base64_image}"
-                    },
-                ],
-            }
-        ],
-        max_tokens=300,
-    )
-
-    description = response.choices[0].message.content
-
-
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Imagine that you are two skeletons (Knotan och Skallan) in a garden\
-						during halloween and you are watching the scene described below. \
-						let the skeletons comment what they see and call on the people they are abnalyuzing like: you therein the green hoodie.\
-						as in the style of Statler and Waldorf in the muppets but keep it short and catchy and funny and in swedish max four sentences? never use markup. \
-                        Each line xtarst with the ane of the skelleton talking  like Skallan: \
-                      Here is the description of the scene: " + description},
-						
-                ],
-            }
-        ],
-        max_tokens=300,
-    )
-
-
-    print("Image Analysis and Dialog Generation:")
-    dialog = response.choices[0].message.content
-    print("Generated dialog:")
-    print(dialog)
-    
-    return dialog  # Return the dialog instead of calling process_dialog here
-
 def has_people(image_path):
     """Check if the image contains people using face detection."""
     img = cv2.imread(image_path)
@@ -205,12 +214,17 @@ def has_people(image_path):
 
 def main():
     camera = setup_camera()
+    analyzer = ImageAnalyzer(client)  # Pass the OpenAI client to the analyzer
 
     while True:
         photo_path, photo_folder = take_photo(camera)
+        print (photo_path)
         if photo_path:
-            dialog = analyze_image(photo_path)
+            print ("ok)")
+            dialog = analyzer.analyze_image(photo_path)
+            print (dialog)
             if dialog:
+                print ("ok2")
                 process_dialog(dialog, photo_folder)
         
         time.sleep(INTERVAL)
