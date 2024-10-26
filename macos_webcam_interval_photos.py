@@ -28,60 +28,58 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 # Load the pre-trained face detection model
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-def list_cameras():
-    """List available cameras using imagesnap."""
-    result = subprocess.run(['imagesnap', '-l'], capture_output=True, text=True)
-    cameras = result.stdout.strip().split('\n')[1:]  # Skip the first line which is a header
+# Create the main photos directory if it doesn't exist
+PHOTOS_DIR = "photos"
+os.makedirs(PHOTOS_DIR, exist_ok=True)
+
+INTERVAL = 5  # or whatever interval you want between photos
+
+def setup_camera():
+    """List available cameras and let the user select one."""
+    result = subprocess.run(["imagesnap", "-l"], capture_output=True, text=True)
+    cameras = result.stdout.strip().split('\n')[1:]  # Skip the header line
     
-    if not cameras:
-        print("No cameras found.")
-        return None
-    
-    if len(cameras) == 1:
-        print(f"Only one camera found: {cameras[0]}. Using this camera.")
-        return cameras[0].strip()
+    # Clean up camera names
+    cameras = [camera.split('=>')[-1].strip() for camera in cameras]
     
     print("Available cameras:")
     for i, camera in enumerate(cameras):
         print(f"{i + 1}. {camera}")
     
-    while True:
-        choice = input("Enter the number of the camera you want to use: ")
-        try:
-            choice = int(choice) - 1
-            if 0 <= choice < len(cameras):
-                return cameras[choice].strip()
-            else:
-                print("Invalid choice. Please try again.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
+    selection = int(input("Select a camera (enter the number): ")) - 1
+    return cameras[selection]
+
+def create_photo_folder():
+    """Create a new subfolder for the current photo."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    photo_folder = os.path.join(PHOTOS_DIR, timestamp)
+    os.makedirs(photo_folder, exist_ok=True)
+    return photo_folder
 
 def take_photo(camera):
-    """Take a photo using the specified camera with imagesnap."""
+    """Take a photo and save it in a new subfolder."""
+    photo_folder = create_photo_folder()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"photo_{timestamp}.jpg"
+    filename = os.path.join(photo_folder, f"photo_{timestamp}.jpg")
     
-    # Remove the "=> " prefix if it exists
-    camera_name = camera[3:] if camera.startswith("=> ") else camera
-    
-    result = subprocess.run(['imagesnap', '-d', camera_name, filename], capture_output=True, text=True)
+    result = subprocess.run(["imagesnap", "-d", camera, "-w", "2", filename], capture_output=True, text=True)
     
     if os.path.exists(filename):
         print(f"Photo saved as {filename}")
         if has_people(filename):
-            print("People detected in the image. Analyzing...")
-            analyze_image(filename)
-            return True
+            return filename, photo_folder
         else:
             print("No people detected in the image. Skipping analysis.")
-            os.remove(filename)  # Optionally remove the photo without people
-            return False
+            os.remove(filename)
+            os.rmdir(photo_folder)
+            return None, None
     else:
         print(f"Error: Could not capture image. {result.stderr}")
-        return False
+        os.rmdir(photo_folder)
+        return None, None
 
-def generate_audio(text, voice_id):
-    """Generate audio from text using ElevenLabs API."""
+def generate_audio(text, voice_id, photo_folder):
+    """Generate audio and save it in the photo folder."""
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     
     payload = {
@@ -104,11 +102,11 @@ def generate_audio(text, voice_id):
     response = requests.post(url, json=payload, headers=headers)
     
     if response.status_code == 200:
-        audio_file = os.path.join(AUDIO_DIR, f"{datetime.now().strftime('%Y%m%d%H%M%S')}.mp3")
-        with open(audio_file, 'wb') as f:
+        audio_filename = os.path.join(photo_folder, f"audio_{int(time.time())}.mp3")
+        with open(audio_filename, "wb") as f:
             f.write(response.content)
-        print(f"Created new audio file: {audio_file}")
-        return audio_file
+        print(f"Created new audio file: {audio_filename}")
+        return audio_filename
     else:
         print(f"Error generating audio: {response.status_code}, {response.text}")
         return None
@@ -120,7 +118,7 @@ def play_audio(audio_file):
     while pygame.mixer.music.get_busy():
         pygame.time.Clock().tick(10)
 
-def process_dialog(dialog):
+def process_dialog(dialog, photo_folder):
     """Process the dialog, generate voices, and play them."""
     lines = dialog.strip().split('\n')
     
@@ -139,7 +137,7 @@ def process_dialog(dialog):
         
         print(f"Processing line: {text}")
         
-        audio_file = generate_audio(text, voice_id)
+        audio_file = generate_audio(text, voice_id, photo_folder)
         if audio_file:
             play_audio(audio_file)
         
@@ -193,10 +191,10 @@ def analyze_image(image_path):
 
     print("Image Analysis and Dialog Generation:")
     dialog = response.choices[0].message.content
+    print("Generated dialog:")
     print(dialog)
-
-    # Process the generated dialog
-    process_dialog(dialog)
+    
+    return dialog  # Return the dialog instead of calling process_dialog here
 
 def has_people(image_path):
     """Check if the image contains people using face detection."""
@@ -206,22 +204,16 @@ def has_people(image_path):
     return len(faces) > 0
 
 def main():
-    camera = list_cameras()
-    if camera is None:
-        return
-    
-    print(f"Selected camera: {camera}")
-    interval = int(input("Enter the interval between photos (in seconds): "))
-    
-    try:
-        while True:
-            if take_photo(camera):
-                time.sleep(interval)
-            else:
-                print("Error taking photo. Retrying in 5 seconds...")
-                time.sleep(5)
-    except KeyboardInterrupt:
-        print("\nScript terminated by user.")
+    camera = setup_camera()
+
+    while True:
+        photo_path, photo_folder = take_photo(camera)
+        if photo_path:
+            dialog = analyze_image(photo_path)
+            if dialog:
+                process_dialog(dialog, photo_folder)
+        
+        time.sleep(INTERVAL)
 
 if __name__ == "__main__":
     main()
